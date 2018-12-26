@@ -28,6 +28,11 @@ type SubProcess struct {
 	echo            bool
 }
 
+type RegexpCallback struct {
+	Regexp   *regexp.Regexp
+	Callback func(sp *SubProcess, idx int) error
+}
+
 func (sp *SubProcess) Start() (err error) {
 	return sp.Term.Start(sp.cmd)
 }
@@ -68,7 +73,19 @@ func (sp *SubProcess) Expect(expreg ...*regexp.Regexp) (matchIndex int, err erro
 	return sp.ExpectTimeout(0, expreg...)
 }
 
+func (sp *SubProcess) ExpectCallback(expregs ...RegexpCallback) (matchIndex int, err error) {
+	return sp.ExpectTimeoutCallback(0, expregs...)
+}
+
 func (sp *SubProcess) ExpectTimeout(timeout time.Duration, expreg ...*regexp.Regexp) (matchIndex int, err error) {
+	var r []RegexpCallback
+	for _, v := range expreg {
+		r = append(r, RegexpCallback{Regexp: v})
+	}
+	return sp.ExpectTimeoutCallback(timeout, r...)
+}
+
+func (sp *SubProcess) ExpectTimeoutCallback(timeout time.Duration, expregs ...RegexpCallback) (matchIndex int, err error) {
 	buf := make([]byte, 2048)
 	c := make(chan byte, 1)
 	checkpoint := make(chan int, 1)
@@ -108,12 +125,16 @@ func (sp *SubProcess) ExpectTimeout(timeout time.Duration, expreg ...*regexp.Reg
 			sp.Before = append(sp.Before, buf...)
 			return -1, e
 		case <-checkpoint:
-			for idx, re := range expreg {
-				if loc := re.FindIndex(buf); loc != nil {
+			for idx, re := range expregs {
+				if loc := re.Regexp.FindIndex(buf); loc != nil {
 					sp.Match = buf[loc[0]:loc[1]]
 					sp.Before = append(sp.Before, buf[0:loc[0]]...)
 					buf = make([]byte, 2048)
-					return idx, nil
+
+					if re.Callback == nil {
+						return idx, nil
+					}
+					return idx, re.Callback(sp, idx)
 				}
 			} // no match
 		}
